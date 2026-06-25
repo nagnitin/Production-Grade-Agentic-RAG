@@ -1,0 +1,41 @@
+# Python exclusions
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Git exclusions
+.git/
+.github/
+.gitignore
+
+# Local configuration files
+.env
+.env.*
+.docker/
+docker-compose.override.yml
+
+# Notebooks and analysis
+.ipynb_checkpoints/
+notebooks/
+
+# System files
+.DS_Store
+Thumbs.db

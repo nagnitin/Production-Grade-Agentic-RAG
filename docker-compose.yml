@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # PostgreSQL Memory & Telemetry Store
+  # ==========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: rag-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: rag
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # Qdrant Vector Database
+  # ==========================================
+  qdrant:
+    image: qdrant/qdrant:v1.12.0
+    container_name: rag-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # FastAPI API Backend
+  # ==========================================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=development
+      - DEBUG=true
+      - API_KEY=changeme
+      
+      # Database Connections (pointing to docker network hosts)
+      - POSTGRES_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/rag
+      - QDRANT_URL=http://qdrant:6333
+      
+      # LLM Gateway & Portkey Setup (Override with real keys in local .env)
+      - PORTKEY_API_KEY=
+      - PORTKEY_VIRTUAL_KEY_PRIMARY=
+      - PORTKEY_VIRTUAL_KEY_FALLBACK=
+      
+      # Guardrails settings
+      - GUARDRAILS_ENABLED=true
+      - GUARDRAILS_CONFIG_PATH=src/guardrails/config
+      
+      # LangSmith Observability
+      - LANGCHAIN_TRACING_V2=false
+      - LANGCHAIN_API_KEY=
+      
+      # Google Cloud Storage Fallback
+      - GCS_BUCKET_NAME=rag-documents
+      - GCS_BUCKET_PROCESSED=rag-processed
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+
+  # ==========================================
+  # Streamlit Chat Interface
+  # ==========================================
+  frontend-chat:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: rag-frontend-chat
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend:8000/api/v1
+      - API_KEY=changeme
+    depends_on:
+      - backend
+
+  # ==========================================
+  # Streamlit Evaluation Dashboard
+  # ==========================================
+  frontend-eval:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: rag-frontend-eval
+    ports:
+      - "8502:8502"
+    # Override default CMD to run the evaluation dashboard script
+    command: streamlit run frontend/eval_app.py --server.port=8502
+    environment:
+      - BACKEND_URL=http://backend:8000/api/v1
+      - API_KEY=changeme
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  qdrant_data:

@@ -1,0 +1,120 @@
+steps:
+  # ==========================================
+  # 1. Build Docker Images
+  # ==========================================
+  # Backend API Image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/backend:latest'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/backend:$COMMIT_SHA'
+      - '.'
+    id: 'build-backend'
+
+  # Frontend Streamlit Image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'Dockerfile.frontend'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/frontend:latest'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/frontend:$COMMIT_SHA'
+      - '.'
+    id: 'build-frontend'
+
+  # ==========================================
+  # 2. Push Images to Artifact Registry
+  # ==========================================
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/backend'
+    id: 'push-backend'
+    depends_on: ['build-backend']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/frontend'
+    id: 'push-frontend'
+    depends_on: ['build-frontend']
+
+  # ==========================================
+  # 3. Deploy Backend API to Cloud Run
+  # ==========================================
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_APP_NAME}-backend'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/backend:$COMMIT_SHA'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+    id: 'deploy-backend'
+    depends_on: ['push-backend']
+
+  # ==========================================
+  # 4. Deploy Frontend Chat to Cloud Run
+  # ==========================================
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_APP_NAME}-chat-ui'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/frontend:$COMMIT_SHA'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'BACKEND_URL=https://${_APP_NAME}-backend-invoker-url/api/v1,API_KEY=changeme'
+    id: 'deploy-chat-ui'
+    depends_on: ['deploy-backend']
+
+  # ==========================================
+  # 5. Deploy Frontend Eval Dashboard to Cloud Run
+  # ==========================================
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_APP_NAME}-eval-ui'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/frontend:$COMMIT_SHA'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--args'
+      - 'run,frontend/eval_app.py,--server.port=8502'
+      - '--port'
+      - '8502'
+      - '--set-env-vars'
+      - 'BACKEND_URL=https://${_APP_NAME}-backend-invoker-url/api/v1,API_KEY=changeme'
+    id: 'deploy-eval-ui'
+    depends_on: ['deploy-backend']
+
+substitutions:
+  _REGION: 'us-central1'
+  _REPO_NAME: 'agentic-rag-repo'
+  _APP_NAME: 'agentic-rag'
+
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/backend:$COMMIT_SHA'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/frontend:$COMMIT_SHA'

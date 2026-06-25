@@ -1,0 +1,5 @@
+project_id  = "enterprise-rag-gcp-project"
+region      = "us-central1"
+environment = "dev"
+app_name    = "agentic-rag"
+db_password = "super-secure-postgres-password-123!"

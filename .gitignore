@@ -1,0 +1,77 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+
+# === Virtual Environments ===
+.venv/
+venv/
+env/
+ENV/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# === Environment Variables ===
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# === Terraform ===
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+.terraform.lock.hcl
+crash.log
+
+# === Docker ===
+docker-compose.override.yml
+
+# === Testing ===
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# === Logs ===
+*.log
+logs/
+
+# === Model Cache ===
+models/
+.cache/
+sentence_transformers/
+
+# === GCP ===
+*.json
+!src/evaluation/datasets/golden_qa.json
+!infrastructure/terraform/**/*.json
+service-account-key.json
+gcp-credentials.json
+
+# === Alembic ===
+alembic/versions/*.pyc
+
+# === Misc ===
+*.bak
+*.tmp
+.benchmarks/
+
+# === Local Database & Storage ===
+storage/
+data/
