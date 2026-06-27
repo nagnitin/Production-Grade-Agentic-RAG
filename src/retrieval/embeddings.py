@@ -130,6 +130,14 @@ class EmbeddingManager:
         """Return the embedding dimension."""
         return self.dimension
 
+    def get_model(self) -> object:
+        """Return a LangChain-compatible HuggingFaceEmbeddings model."""
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+        return HuggingFaceEmbeddings(
+            model_name=self.model_name,
+            model_kwargs={"device": self.device}
+        )
+
     async def health_check(self) -> bool:
         """Verify the model can produce embeddings."""
         try:

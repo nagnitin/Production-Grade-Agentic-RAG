@@ -72,6 +72,9 @@ class RagasEvaluator:
         Saves a pending run, generates predictions using the agent graph,
         runs Ragas evaluations, and persists the final scores.
         """
+        import nest_asyncio
+        nest_asyncio.apply()
+
         start_time = time.perf_counter()
         session_factory = self.memory_store.session_factory
 
@@ -153,18 +156,87 @@ class RagasEvaluator:
 
             # 5. Build LLM and Embeddings wrappers for Ragas evaluation
             # Reuses our Portkey client & FastEmbed managers to avoid API config mismatch
-            gateway_client = self.graph_config["gateway"]._build_client()
+            from langchain_core.language_models.chat_models import BaseChatModel
+            from langchain_core.outputs import ChatResult, ChatGeneration
+            
+            class RagasLLMWrapper(BaseChatModel):
+                gateway: Any = None
+                _lock: Any = None
+                _thread_lock: Any = None
+                
+                @property
+                def lock(self) -> asyncio.Lock:
+                    if self._lock is None:
+                        self._lock = asyncio.Lock()
+                    return self._lock
+                    
+                @property
+                def thread_lock(self) -> Any:
+                    if self._thread_lock is None:
+                        import threading
+                        self._thread_lock = threading.Lock()
+                    return self._thread_lock
+                
+                def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+                    import asyncio
+                    import time
+                    with self.thread_lock:
+                        for attempt in range(1, 31):
+                            try:
+                                time.sleep(3.0)
+                                try:
+                                    loop = asyncio.get_event_loop()
+                                except RuntimeError:
+                                    loop = asyncio.new_event_loop()
+                                    asyncio.set_event_loop(loop)
+                                response = loop.run_until_complete(self.gateway.ainvoke(messages))
+                                return ChatResult(generations=[ChatGeneration(message=response)])
+                            except Exception as e:
+                                if attempt == 30:
+                                    raise e
+                                sleep_time = min(5.0 * attempt, 30.0)
+                                logger.warning(f"APIFreeLLM sync call failed (attempt {attempt}/30): {e}. Retrying in {sleep_time}s...")
+                                time.sleep(sleep_time)
+                    
+                async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+                    async with self.lock:
+                        for attempt in range(1, 31):
+                            try:
+                                await asyncio.sleep(3.0)
+                                response = await self.gateway.ainvoke(messages)
+                                return ChatResult(generations=[ChatGeneration(message=response)])
+                            except Exception as e:
+                                if attempt == 30:
+                                    raise e
+                                sleep_time = min(5.0 * attempt, 30.0)
+                                logger.warning(f"APIFreeLLM async call failed (attempt {attempt}/30): {e}. Retrying in {sleep_time}s...")
+                                await asyncio.sleep(sleep_time)
+                    
+                @property
+                def _llm_type(self) -> str:
+                    return "portkey_gateway"
+
+            gateway_client = RagasLLMWrapper(gateway=self.graph_config["gateway"])
             embedding_client = self.graph_config["vectorstore"].embedding_manager.get_model()
 
             logger.info("Computing Ragas metrics", run_id=run_id)
             
-            # Execute Ragas evaluation
+            # Execute Ragas evaluation with strict rate limit protection
+            from ragas.run_config import RunConfig
+            run_config = RunConfig(
+                max_workers=1,
+                timeout=1200,
+                max_retries=10,
+                max_wait=60
+            )
+
             # Ragas expects an async call loop or synchronous execute
             eval_result = evaluate(
                 dataset=hf_dataset,
                 metrics=ragas_metrics,
                 llm=gateway_client,
                 embeddings=embedding_client,
+                run_config=run_config
             )
 
             # 6. Parse results and update DB tables
@@ -174,18 +246,26 @@ class RagasEvaluator:
             async with session_factory() as db:
                 # Add individual sample results
                 for idx, row in df_results.iterrows():
+                    q = row.get("question") if "question" in row else row.get("user_input", "")
+                    gt = row.get("ground_truth") if "ground_truth" in row else row.get("reference", "")
+                    ans = row.get("answer") if "answer" in row else row.get("response", "")
+                    ctx = row.get("contexts") if "contexts" in row else row.get("retrieved_contexts", [])
+                    
                     res = EvaluationResult(
                         run_id=run_uuid,
-                        question=row["question"],
-                        ground_truth=row["ground_truth"],
-                        generated_answer=row["answer"],
-                        contexts=row["contexts"],
+                        question=q,
+                        ground_truth=gt,
+                        generated_answer=ans,
+                        contexts=ctx,
                         metrics={m: float(row[m]) for m in metrics_list if m in row},
                     )
                     db.add(res)
 
                 # Update the main run summary
-                summary_metrics = {m: float(eval_result[m]) for m in metrics_list if m in eval_result}
+                summary_metrics = {}
+                for m in metrics_list:
+                    if m in df_results.columns:
+                        summary_metrics[m] = float(df_results[m].mean())
                 
                 await db.execute(
                     update(EvaluationRun)
@@ -202,7 +282,9 @@ class RagasEvaluator:
             logger.info("Evaluation run completed successfully", run_id=run_id, duration_seconds=round(duration, 2))
 
         except Exception as e:
-            logger.error("Evaluation run failed", run_id=run_id, error=str(e))
+            import traceback
+            tb = traceback.format_exc()
+            logger.error("Evaluation run failed", run_id=run_id, error=str(e), traceback=tb)
             duration = time.perf_counter() - start_time
             
             async with session_factory() as db:
@@ -211,7 +293,7 @@ class RagasEvaluator:
                     .where(EvaluationRun.id == run_uuid)
                     .values(
                         status="failed",
-                        error=str(e),
+                        error=f"{str(e)}\n\n{tb}",
                         duration_seconds=round(duration, 2),
                     )
                 )
